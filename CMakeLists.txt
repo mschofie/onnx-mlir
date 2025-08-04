@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.20.0)
 project(onnx-mlir)
 
 option(ONNX_MLIR_BUILD_TESTS "Build ONNX-MLIR test executables. If OFF, just generate build targets." ON)
+option(ONNX_MLIR_BUILD_THIRD_PARTY "Build third party dependencies." ON)
 option(ONNX_MLIR_CCACHE_BUILD "Set to ON for a ccache enabled build." OFF)
 option(ONNX_MLIR_ENABLE_STABLEHLO "Enable StableHLO support." ON)
 option(ONNX_MLIR_ENABLE_WERROR "Enable warnings as errors." OFF)
@@ -161,47 +162,76 @@ endif()
 # Decrease the log level for the inclusion of third party code
 set(CMAKE_MESSAGE_LOG_LEVEL NOTICE)
 
-# Add third party subdirectories and define options appropriate to run their cmakes.
-if (ONNX_MLIR_ENABLE_PYRUNTIME_LIGHT)
-  add_subdirectory(third_party/onnx)
-  add_subdirectory(third_party/pybind11)
-else()
-  set(pybind11_FIND_QUIETLY ON)
-  add_subdirectory(third_party/onnx)
-  add_subdirectory(third_party/pybind11)
+if (NOT ONNX_MLIR_BUILD_THIRD_PARTY)
+  # If ONNX_BUILD_THIRD_PARTY is not set, we assume that the third party
+  # dependencies are already built and available in the system.
+  # This is useful for building ONNX-MLIR with a pre-built ONNX runtime.
+  message(STATUS "Building ONNX-MLIR without third party dependencies.")
+  set(ONNX_MLIR_ENABLE_PYRUNTIME_LIGHT ON CACHE BOOL "Enable Python runtime without third party dependencies." FORCE)
 
-  add_subdirectory(third_party/rapidcheck)
+  find_package(benchmark CONFIG REQUIRED)
+  find_package(ONNX CONFIG REQUIRED)
+  find_package(pybind11 CONFIG REQUIRED)
+  find_package(rapidcheck CONFIG REQUIRED)
+
+  add_library(onnx ALIAS ONNX::onnx)
+
+  # All libraries and executables coming from llvm or ONNX-MLIR have had their
+  # compile flags updated via llvm_update_compile_flags, so we need to do that to
+  # benchmark and rapidcheck as well, so that we can successfully link against them.
+  # Otherwise, some of the flags for exceptions (among others) are not set correctly.
+  llvm_update_compile_flags(benchmark::benchmark)
+  llvm_update_compile_flags(benchmark::benchmark_main)
+  llvm_update_compile_flags(rapidcheck)
 
   if (ONNX_MLIR_ENABLE_STABLEHLO)
-    # Workaround for stablehlo failing to link libStablehloOptimizationPasses.so if built with shared libs
-    set(ONNX_MLIR_BUILD_SHARED_LIBS_STORE ${BUILD_SHARED_LIBS})
-    set(BUILD_SHARED_LIBS OFF)
-    add_subdirectory(third_party/stablehlo EXCLUDE_FROM_ALL)
-    set(BUILD_SHARED_LIBS ${ONNX_MLIR_BUILD_SHARED_LIBS_STORE})
+    llvm_update_compile_flags(stablehlo-opt)
+    llvm_update_compile_flags(stablehlo-translate)
   endif()
 
-  if (NOT TARGET benchmark)
-    set(BENCHMARK_USE_BUNDLED_GTEST OFF)
-    set(BENCHMARK_ENABLE_GTEST_TESTS OFF)
-    set(BENCHMARK_ENABLE_TESTING OFF)
-    set(BENCHMARK_ENABLE_WERROR OFF)
-    # Since LLVM requires C++11 (or higher) it is safe to assume that std::regex is available.
-    set(HAVE_STD_REGEX ON CACHE BOOL "OK" FORCE)
-    add_subdirectory(third_party/benchmark)
+else()
+  # Add third party subdirectories and define options appropriate to run their cmakes.
+  if (ONNX_MLIR_ENABLE_PYRUNTIME_LIGHT)
+    add_subdirectory(third_party/onnx)
+    add_subdirectory(third_party/pybind11)
+  else()
+    set(pybind11_FIND_QUIETLY ON)
+    add_subdirectory(third_party/onnx)
+    add_subdirectory(third_party/pybind11)
+
+    add_subdirectory(third_party/rapidcheck)
+
+    if (ONNX_MLIR_ENABLE_STABLEHLO)
+      # Workaround for stablehlo failing to link libStablehloOptimizationPasses.so if built with shared libs
+      set(ONNX_MLIR_BUILD_SHARED_LIBS_STORE ${BUILD_SHARED_LIBS})
+      set(BUILD_SHARED_LIBS OFF)
+      add_subdirectory(third_party/stablehlo EXCLUDE_FROM_ALL)
+      set(BUILD_SHARED_LIBS ${ONNX_MLIR_BUILD_SHARED_LIBS_STORE})
+    endif()
+
+    if (NOT TARGET benchmark)
+      set(BENCHMARK_USE_BUNDLED_GTEST OFF)
+      set(BENCHMARK_ENABLE_GTEST_TESTS OFF)
+      set(BENCHMARK_ENABLE_TESTING OFF)
+      set(BENCHMARK_ENABLE_WERROR OFF)
+      # Since LLVM requires C++11 (or higher) it is safe to assume that std::regex is available.
+      set(HAVE_STD_REGEX ON CACHE BOOL "OK" FORCE)
+      add_subdirectory(third_party/benchmark)
+    endif()
   endif()
-endif()
 
-# All libraries and executables coming from llvm or ONNX-MLIR have had their
-# compile flags updated via llvm_update_compile_flags, so we need to do that to
-# benchmark and rapidcheck as well, so that we can successfully link against them.
-# Otherwise, some of the flags for exceptions (among others) are not set correctly.
-llvm_update_compile_flags(benchmark)
-llvm_update_compile_flags(benchmark_main)
-llvm_update_compile_flags(rapidcheck)
+  # All libraries and executables coming from llvm or ONNX-MLIR have had their
+  # compile flags updated via llvm_update_compile_flags, so we need to do that to
+  # benchmark and rapidcheck as well, so that we can successfully link against them.
+  # Otherwise, some of the flags for exceptions (among others) are not set correctly.
+  llvm_update_compile_flags(benchmark)
+  llvm_update_compile_flags(benchmark_main)
+  llvm_update_compile_flags(rapidcheck)
 
-if (ONNX_MLIR_ENABLE_STABLEHLO)
-  llvm_update_compile_flags(stablehlo-opt)
-  llvm_update_compile_flags(stablehlo-translate)
+  if (ONNX_MLIR_ENABLE_STABLEHLO)
+    llvm_update_compile_flags(stablehlo-opt)
+    llvm_update_compile_flags(stablehlo-translate)
+  endif()
 endif()
 
 # Increase the log level for onnx-mlir
